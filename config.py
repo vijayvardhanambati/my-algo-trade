@@ -8,10 +8,13 @@ API_SECRET   = os.environ["KITE_API_SECRET"]
 ACCESS_TOKEN = os.environ.get("KITE_ACCESS_TOKEN", "")
 TRADING_MODE = os.environ.get("TRADING_MODE", "paper")
 
-CAPITAL       = 20000
-QUANTITY      = 1
-STOP_LOSS_PCT = 0.5
-TARGET_PCT    = 1.5
+CAPITAL               = 20000
+QUANTITY              = 1
+STOP_LOSS_PCT         = 0.5
+TARGET_PCT            = 1.5
+DAILY_PROFIT_TARGET   = 1000
+TAX_RATE              = 0.42
+LEVERAGE_MULTIPLIER   = 5
 
 WATCHLIST = ["HDFCBANK", "ICICIBANK", "RELIANCE"]
 
