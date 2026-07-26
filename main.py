@@ -7,6 +7,7 @@ from auth import login
 from market_data import get_ohlcv
 from order_manager import OrderManager
 from strategies import MACrossoverStrategy, RSIStrategy, VWAPBreakoutStrategy
+from strategies.base import Signal, TradeSignal
 from config import WATCHLIST, MARKET_OPEN, MARKET_CLOSE, SQUARE_OFF_TIME, TRADING_MODE
 
 logging.basicConfig(
@@ -43,10 +44,23 @@ def run_strategies(kite, order_manager: OrderManager):
                 VWAPBreakoutStrategy(symbol),
             ]
 
-            for strategy in strategies:
-                signal = strategy.generate_signal(df)
-                logger.info(f"[{strategy.__class__.__name__}] {symbol}: {signal.signal.value} — {signal.reason}")
-                order_manager.execute(signal)
+            signals = [s.generate_signal(df) for s in strategies]
+
+            for sig, strat in zip(signals, strategies):
+                logger.info(f"[{strat.__class__.__name__}] {symbol}: {sig.signal.value} — {sig.reason}")
+
+            buy_votes  = sum(1 for s in signals if s.signal == Signal.BUY)
+            sell_votes = sum(1 for s in signals if s.signal == Signal.SELL)
+            price      = signals[0].price
+
+            if buy_votes >= 2:
+                logger.info(f"[CONSENSUS] {symbol}: BUY — {buy_votes}/3 strategies agree")
+                order_manager.execute(TradeSignal(symbol, Signal.BUY, f"{buy_votes}/3 agree BUY", price))
+            elif sell_votes >= 2:
+                logger.info(f"[CONSENSUS] {symbol}: SELL — {sell_votes}/3 strategies agree")
+                order_manager.execute(TradeSignal(symbol, Signal.SELL, f"{sell_votes}/3 agree SELL", price))
+            else:
+                logger.info(f"[CONSENSUS] {symbol}: No consensus — skipping")
 
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
