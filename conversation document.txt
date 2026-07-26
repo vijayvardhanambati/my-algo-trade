@@ -1,0 +1,49 @@
+Now I need your Kite Connect credentials to create the .env file before running. Please provide your:
+
+KITE_API_KEY — from https://kite.trade (your app dashboard)
+KITE_API_SECRET — same place
+Once you share those, I'll create the .env and launch the bot. It will open your browser for Zerodha login and capture the token automatically via the Flask redirect.
+
+That's the regular Kite trading dashboard — that's not where API credentials live.
+
+You need the Kite Connect developer portal to get your API Key and Secret. Here's the difference:
+
+URL	What it is
+Regular dashboard	kite.zerodha.com	For manual trading
+Developer portal	kite.trade	For API/algo trading ← you need this
+Steps to get your API credentials:
+
+Go to https://kite.trade and log in with your Zerodha credentials
+Click "My apps" or "Create new app"
+If you haven't created an app yet, fill in:
+App name: anything (e.g. my-algo-bot)
+App type: Connect
+Redirect URL: http://127.0.0.1:5000/
+Your API Key and API Secret will be shown on the app detail page
+Note: Kite Connect API access costs ₹2,000/month. If you haven't subscribed yet, you'll need to do that first on the kite.trade portal.
+
+Once you have the API Key and Secret, share them here and I'll create the .env file and run the bot.
+
+Done. Summary of what changed (paper mode only — live path is byte-for-byte identical to before):
+
+costs.py (new) — Zerodha intraday equity charges: brokerage (0.03%/₹20 cap), STT, exchange fees, SEBI charges, stamp duty, 18% GST. Verified against hand-math: ~₹26–27 round-trip cost on a ₹25,000 trade.
+ledger.py (new) — PaperLedger records every paper trade to paper_trades.csv with gross P&L → charges → net → 42% tax (applied only to profits) → net-after-tax, and logs a daily summary against the ₹1,000 target plus a running track record (X/Y days hit target) once multiple days accumulate.
+config.py — added CAPITAL = 25_000, DAILY_PROFIT_TARGET = 1_000, TAX_RATE = 0.42, LEVERAGE_MULTIPLIER = 5 (reference-only, never used for sizing).
+order_manager.py — in paper mode only: position size is now CAPITAL // price instead of a fixed 1 share, only one position across the whole watchlist can be open at a time (full capital deployed, not fragmented), square-off fetches a real live price via get_ltp to price the exit, and every closed trade feeds the ledger.
+I ran the charges + ledger logic standalone (not the live bot, since that needs real Kite credentials) — a +1% move on a ₹25,000 position nets ₹128 after charges and tax, a -0.5% move nets -₹151. That's the real math your strategies are up against: you'd need several genuinely strong, consistent winning days like that just to clear ₹1,000 once.
+
+Next time you run the bot in paper mode, bot.log and paper_trades.csv will show you the honest daily numbers — gross, after-charges, and after-tax — against the target, so you can see empirically whether MA-crossover/RSI/VWAP have real edge before ever considering live money.
+
+You don't have a local .env here, so I can't run the backtest myself against your real Kite credentials — but it's ready for you to run wherever your account is authenticated (your VM, or locally once you copy .env with real KITE_API_KEY/KITE_API_SECRET).
+
+To run it:
+
+
+python backtest.py 60    # replays the last 60 calendar days (~40 trading sessions)
+It replays all 3 production strategies, bar-by-bar, over real historical 5-minute NSE data for RELIANCE/INFY/TCS, applies the exact same Zerodha charges + 42% tax model as paper mode, and prints:
+
+Win rate, total trades
+Avg / median / best / worst net-after-tax P&L per day
+% of days that actually hit ₹1,000
+Everything logged to backtest_trades.csv for your own inspection
+Paste me the printed report when it finishes and I'll help you read it — specifically whether there's any real edge here or whether (as SEBI's data on retail intraday traders would predict) it's closer to breakeven/negative, and if so, whether it's worth tuning the strategy parameters or if the whole approach needs rethinking before you risk real capital.
