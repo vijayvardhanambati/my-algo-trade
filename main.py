@@ -59,6 +59,7 @@ def run_options_bot(kite, options_manager: OptionsManager):
     if is_square_off_time():
         logger.info("[BOT] Square-off time reached — closing all positions")
         options_manager.square_off()
+        options_manager.daily_summary()
         return
 
     # Don't open a new position if we already have one
@@ -129,8 +130,8 @@ def run_options_bot(kite, options_manager: OptionsManager):
 
     logger.info(f"[CONSENSUS] BUY: {buy_votes}/{total} | SELL: {sell_votes}/{total} | Regime: {regime}")
 
-    # Need 3/5 (or 3/total if fewer) indicators in agreement
-    threshold = max(3, (total // 2) + 1)
+    # Need 2/5 indicators in agreement (Option A: looser entry, tighter VIX filter)
+    threshold = 2
 
     if regime == "bull" and buy_votes >= threshold:
         reason = f"Bull regime + {buy_votes}/{total} indicators agree BUY + {sentiment} sentiment"
@@ -143,7 +144,7 @@ def run_options_bot(kite, options_manager: OptionsManager):
         options_manager.enter("PE", reason)
 
     else:
-        logger.info(f"[CONSENSUS] No strong consensus — need {threshold}/{total}, got BUY:{buy_votes} SELL:{sell_votes}")
+        logger.info(f"[CONSENSUS] No consensus — need {threshold}/{total}, got BUY:{buy_votes} SELL:{sell_votes}")
 
 
 def main():

@@ -93,8 +93,9 @@ class OptionsManager:
     """Handles entry, monitoring, and exit of options positions."""
 
     def __init__(self, kite: KiteConnect):
-        self.kite     = kite
+        self.kite        = kite
         self.position: OptionsPosition | None = None
+        self.trade_log: list = []
 
     def has_position(self) -> bool:
         return self.position is not None
@@ -196,7 +197,51 @@ class OptionsManager:
             except Exception as e:
                 logger.error(f"[OPTIONS] Exit order failed: {e}")
 
+        self.trade_log.append({
+            "time":            datetime.now().strftime("%H:%M"),
+            "type":            self.position.option_type,
+            "symbol":          self.position.tradingsymbol,
+            "entry":           self.position.entry_premium,
+            "exit":            exit_premium,
+            "pnl":             pnl,
+            "pct":             pct,
+            "reason":          reason,
+        })
         self.position = None
+
+    def daily_summary(self):
+        sep = "=" * 60
+        logger.info(sep)
+        logger.info(f"  DAILY SUMMARY — {date.today().strftime('%d %b %Y')}")
+        logger.info(sep)
+
+        if not self.trade_log:
+            logger.info("  No trades taken today.")
+            logger.info(sep)
+            return
+
+        total    = len(self.trade_log)
+        wins     = [t for t in self.trade_log if t["pnl"] > 0]
+        losses   = [t for t in self.trade_log if t["pnl"] <= 0]
+        total_pnl = sum(t["pnl"] for t in self.trade_log)
+        win_rate  = (len(wins) / total * 100) if total else 0
+
+        logger.info(f"  Trades taken  : {total}")
+        logger.info(f"  Winners       : {len(wins)}")
+        logger.info(f"  Losers        : {len(losses)}")
+        logger.info(f"  Win rate      : {win_rate:.1f}%")
+        logger.info(f"  Total P&L     : ₹{total_pnl:+.2f}")
+        logger.info(sep)
+        logger.info("  Trade-by-trade breakdown:")
+        for i, t in enumerate(self.trade_log, 1):
+            result = "WIN " if t["pnl"] > 0 else "LOSS"
+            logger.info(
+                f"  {i}. [{result}] {t['time']} | {t['type']} | {t['symbol']} | "
+                f"Entry ₹{t['entry']:.2f} → Exit ₹{t['exit']:.2f} | "
+                f"P&L ₹{t['pnl']:+.2f} ({t['pct']:+.1f}%) | {t['reason']}"
+            )
+        logger.info(sep)
+        self.trade_log = []  # reset for next day
 
     def square_off(self):
         if self.has_position():

@@ -16,7 +16,7 @@ OPTIONS_CAPITAL  = 3000   # max rupees per options trade
 # Options risk management
 OPTIONS_SL_PCT     = 40   # exit if premium drops 40%
 OPTIONS_TARGET_PCT = 50   # exit if premium gains 50%
-MAX_VIX            = 20   # skip trading if India VIX > this
+MAX_VIX            = 15   # skip trading if India VIX > this
 
 # Underlying for options
 UNDERLYING = "BANKNIFTY"  # BANKNIFTY or NIFTY
