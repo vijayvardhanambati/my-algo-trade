@@ -92,17 +92,32 @@ class OptionsPosition:
 class OptionsManager:
     """Handles entry, monitoring, and exit of options positions."""
 
+    COOLDOWN_MINUTES = 60  # wait this long after a stop loss before re-entering
+
     def __init__(self, kite: KiteConnect):
-        self.kite        = kite
+        self.kite            = kite
         self.position: OptionsPosition | None = None
         self.trade_log: list = []
+        self._last_loss_time: datetime | None = None
 
     def has_position(self) -> bool:
         return self.position is not None
 
+    def _in_cooldown(self) -> bool:
+        if self._last_loss_time is None:
+            return False
+        elapsed = (datetime.now() - self._last_loss_time).total_seconds() / 60
+        if elapsed < self.COOLDOWN_MINUTES:
+            remaining = int(self.COOLDOWN_MINUTES - elapsed)
+            logger.info(f"[OPTIONS] Cooldown active — {remaining} min left after last stop loss")
+            return True
+        return False
+
     def enter(self, direction: str, reason: str):
         if self.has_position():
             logger.info(f"[OPTIONS] Already in a position — skipping new {direction}")
+            return
+        if self._in_cooldown():
             return
 
         try:
@@ -161,6 +176,7 @@ class OptionsManager:
             if force_reason:
                 self._exit(current, force_reason)
             elif pct <= -OPTIONS_SL_PCT:
+                self._last_loss_time = datetime.now()
                 self._exit(current, f"Stop loss hit ({pct:.1f}%)")
             elif pct >= OPTIONS_TARGET_PCT:
                 self._exit(current, f"Target hit ({pct:.1f}%)")

@@ -111,10 +111,12 @@ def run_options_bot(kite, options_manager: OptionsManager):
         SupertrendStrategy(UNDERLYING),
     ]
 
-    signals = []
+    signal_map = {}
+    signals    = []
     for strat in strategies:
         try:
             sig = strat.generate_signal(df)
+            signal_map[strat.__class__.__name__] = sig
             signals.append(sig)
             logger.info(f"[{strat.__class__.__name__}] {sig.signal.value} — {sig.reason}")
         except Exception as e:
@@ -130,15 +132,24 @@ def run_options_bot(kite, options_manager: OptionsManager):
 
     logger.info(f"[CONSENSUS] BUY: {buy_votes}/{total} | SELL: {sell_votes}/{total} | Regime: {regime}")
 
+    # Supertrend veto — if Supertrend strongly disagrees, block the trade
+    st_sig = signal_map.get("SupertrendStrategy")
+
     # Need 2/5 indicators in agreement (Option A: looser entry, tighter VIX filter)
     threshold = 2
 
     if regime == "bull" and buy_votes >= threshold:
+        if st_sig and st_sig.signal == Signal.SELL:
+            logger.info("[VETO] Supertrend bearish — blocking CE entry despite bull regime")
+            return
         reason = f"Bull regime + {buy_votes}/{total} indicators agree BUY + {sentiment} sentiment"
         logger.info(f"[SIGNAL] Entering CE (Call) — {reason}")
         options_manager.enter("CE", reason)
 
     elif regime == "bear" and sell_votes >= threshold:
+        if st_sig and st_sig.signal == Signal.BUY:
+            logger.info("[VETO] Supertrend bullish — blocking PE entry despite bear regime")
+            return
         reason = f"Bear regime + {sell_votes}/{total} indicators agree SELL + {sentiment} sentiment"
         logger.info(f"[SIGNAL] Entering PE (Put) — {reason}")
         options_manager.enter("PE", reason)
