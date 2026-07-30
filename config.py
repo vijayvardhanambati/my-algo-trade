@@ -32,10 +32,25 @@ VIX_BUYER_MAX      = 18   # buy options when VIX is between 13 and 18
 MAX_VIX            = 18   # kept for backward compatibility
 MIN_VIX            = 11   # kept for backward compatibility
 
-# ── Underlying ─────────────────────────────────────────────────────────────────
-# NIFTY: weekly expiry every Thursday — more liquid, SEBI still allows weekly
-# BANKNIFTY: monthly expiry only since SEBI Nov 2024 — less frequent action
+# ── Underlying (used for SELLER / spread mode only) ───────────────────────────
 UNDERLYING = "NIFTY"
+
+# ── Buyer-mode watchlist ───────────────────────────────────────────────────────
+# Any NSE F&O symbol can be listed here.  The bot scores every symbol with all
+# 5 strategies each scan cycle and trades the one with the highest consensus.
+# Symbols must match the NFO "name" field (i.e. the root symbol, not the option
+# tradingsymbol).  Remove any symbol whose options you don't want traded.
+WATCHLIST = [
+    "NIFTY",
+    "BANKNIFTY",
+    "RELIANCE",
+    "TCS",
+    "INFY",
+    "HDFCBANK",
+    "ICICIBANK",
+    "SBIN",
+    "BAJFINANCE",
+]
 
 # ── Equity strategy parameters (kept for ledger/costs compatibility) ───────────
 STOP_LOSS_PCT       = 0.5

@@ -6,8 +6,14 @@ from config import UNDERLYING, OPTIONS_CAPITAL, OPTIONS_SL_PCT, OPTIONS_TARGET_P
 
 logger = logging.getLogger(__name__)
 
-_LOT_SIZE = {"BANKNIFTY": 30, "NIFTY": 75}  # SEBI revised lot sizes Nov 2024
+_LOT_SIZE = {"BANKNIFTY": 30, "NIFTY": 75}  # fallback; dynamic lookup used for all other symbols
 _instruments_cache: dict = {}
+
+_INDEX_LTP_KEYS = {
+    "NIFTY":    "NSE:NIFTY 50",
+    "BANKNIFTY": "NSE:NIFTY BANK",
+    "FINNIFTY": "NSE:NIFTY FIN SERVICE",
+}
 
 
 def _get_nfo_instruments(kite: KiteConnect) -> pd.DataFrame:
@@ -23,47 +29,47 @@ def _get_nfo_instruments(kite: KiteConnect) -> pd.DataFrame:
     return df
 
 
-def get_atm_option(kite: KiteConnect, direction: str) -> dict:
-    """Find nearest-expiry ATM CE or PE for the configured underlying."""
-    ltp_key = "NSE:NIFTY BANK" if UNDERLYING == "BANKNIFTY" else "NSE:NIFTY 50"
-    quote         = kite.ltp([ltp_key])
-    current_price = quote[ltp_key]["last_price"]
+def get_lot_size(kite: KiteConnect, symbol: str) -> int:
+    """Look up current lot size from the NFO instruments list."""
+    df   = _get_nfo_instruments(kite)
+    rows = df[df["name"] == symbol]
+    if rows.empty:
+        return _LOT_SIZE.get(symbol, 1)
+    return int(rows.iloc[0]["lot_size"])
 
-    strike_gap = 100 if UNDERLYING == "BANKNIFTY" else 50
-    atm_strike = round(current_price / strike_gap) * strike_gap
+
+def get_atm_option(kite: KiteConnect, direction: str, symbol: str) -> dict:
+    """
+    Find the nearest-expiry option closest to ATM for any F&O symbol.
+    Works for indices (NIFTY, BANKNIFTY) and individual stocks (RELIANCE, TCS, …).
+    """
+    ltp_key       = _INDEX_LTP_KEYS.get(symbol, f"NSE:{symbol}")
+    current_price = kite.ltp([ltp_key])[ltp_key]["last_price"]
 
     df    = _get_nfo_instruments(kite)
     today = date.today()
 
-    def _find(strike):
-        return df[
-            (df["name"] == UNDERLYING) &
-            (df["instrument_type"] == direction) &
-            (df["strike"] == float(strike)) &
-            (df["expiry"] >= today)
-        ]
+    rows = df[
+        (df["name"] == symbol) &
+        (df["instrument_type"] == direction) &
+        (df["expiry"] >= today)
+    ]
+    if rows.empty:
+        raise ValueError(f"No {symbol} {direction} options found in NFO")
 
-    options = _find(atm_strike)
+    nearest_expiry = rows["expiry"].min()
+    near           = rows[rows["expiry"] == nearest_expiry].copy()
+    near["dist"]   = (near["strike"] - current_price).abs()
+    best           = near.loc[near["dist"].idxmin()]
 
-    # Try adjacent strikes if ATM not found
-    if options.empty:
-        for offset in [strike_gap, -strike_gap, 2 * strike_gap, -2 * strike_gap]:
-            options = _find(atm_strike + offset)
-            if not options.empty:
-                atm_strike += offset
-                break
-
-    if options.empty:
-        raise ValueError(f"No {UNDERLYING} {direction} found near strike {atm_strike}")
-
-    nearest = options.loc[options["expiry"].idxmin()]
     return {
-        "instrument_token": int(nearest["instrument_token"]),
-        "tradingsymbol":    nearest["tradingsymbol"],
-        "strike":           atm_strike,
-        "expiry":           nearest["expiry"],
+        "instrument_token": int(best["instrument_token"]),
+        "tradingsymbol":    best["tradingsymbol"],
+        "strike":           float(best["strike"]),
+        "expiry":           nearest_expiry,
         "option_type":      direction,
         "underlying_price": current_price,
+        "symbol":           symbol,
     }
 
 
@@ -74,13 +80,13 @@ def get_option_ltp(kite: KiteConnect, tradingsymbol: str) -> float:
 
 
 class OptionsPosition:
-    def __init__(self, option_info: dict, entry_premium: float, lots: int):
-        self.option_info    = option_info
-        self.entry_premium  = entry_premium
-        self.lots           = lots
-        self.tradingsymbol  = option_info["tradingsymbol"]
-        self.option_type    = option_info["option_type"]
-        self.lot_size       = _LOT_SIZE.get(UNDERLYING, 15)
+    def __init__(self, option_info: dict, entry_premium: float, lots: int, lot_size: int):
+        self.option_info   = option_info
+        self.entry_premium = entry_premium
+        self.lots          = lots
+        self.lot_size      = lot_size
+        self.tradingsymbol = option_info["tradingsymbol"]
+        self.option_type   = option_info["option_type"]
 
     def pnl(self, current_premium: float) -> float:
         return (current_premium - self.entry_premium) * self.lots * self.lot_size
@@ -90,30 +96,18 @@ class OptionsPosition:
 
 
 class OptionsManager:
-    """Handles entry, monitoring, and exit of options positions."""
+    """Handles entry, monitoring, and exit of options positions for any F&O symbol."""
 
-    COOLDOWN_MINUTES  = 60
-    DAILY_TARGET      = CAPITAL * OPTIONS_DAILY_TARGET_PCT / 100  # 5% of ₹25000 = ₹1250
+    DAILY_TARGET = CAPITAL * OPTIONS_DAILY_TARGET_PCT / 100
 
     def __init__(self, kite: KiteConnect):
-        self.kite            = kite
+        self.kite      = kite
         self.position: OptionsPosition | None = None
-        self.trade_log: list = []
+        self.trade_log: list  = []
         self.daily_pnl: float = 0.0
-        self._last_loss_time: datetime | None = None
 
     def has_position(self) -> bool:
         return self.position is not None
-
-    def _in_cooldown(self) -> bool:
-        if self._last_loss_time is None:
-            return False
-        elapsed = (datetime.now() - self._last_loss_time).total_seconds() / 60
-        if elapsed < self.COOLDOWN_MINUTES:
-            remaining = int(self.COOLDOWN_MINUTES - elapsed)
-            logger.info(f"[OPTIONS] Cooldown active — {remaining} min left after last stop loss")
-            return True
-        return False
 
     def daily_target_reached(self) -> bool:
         if self.daily_pnl >= self.DAILY_TARGET:
@@ -124,22 +118,20 @@ class OptionsManager:
             return True
         return False
 
-    def enter(self, direction: str, reason: str):
+    def enter(self, direction: str, reason: str, symbol: str = UNDERLYING):
         if self.has_position():
             logger.info(f"[OPTIONS] Already in a position — skipping new {direction}")
-            return
-        if self._in_cooldown():
             return
         if self.daily_target_reached():
             return
 
         try:
-            option   = get_atm_option(self.kite, direction)
+            option   = get_atm_option(self.kite, direction, symbol)
             premium  = get_option_ltp(self.kite, option["tradingsymbol"])
-            lot_size = _LOT_SIZE.get(UNDERLYING, 15)
+            lot_size = get_lot_size(self.kite, symbol)
 
             if premium <= 0:
-                logger.warning(f"[OPTIONS] Invalid premium {premium} — skipping")
+                logger.warning(f"[OPTIONS] Invalid premium {premium} for {symbol} — skipping")
                 return
 
             lots = max(1, int(OPTIONS_CAPITAL / (premium * lot_size)))
@@ -148,7 +140,7 @@ class OptionsManager:
                 f"[OPTIONS {'PAPER' if TRADING_MODE == 'paper' else 'LIVE'}] "
                 f"BUY {direction} | {option['tradingsymbol']} | "
                 f"Strike: {option['strike']} | Expiry: {option['expiry']} | "
-                f"Premium: ₹{premium:.2f} | Lots: {lots} | "
+                f"Premium: ₹{premium:.2f} | Lots: {lots} | Lot size: {lot_size} | "
                 f"Underlying: ₹{option['underlying_price']:.2f} | "
                 f"Reason: {reason}"
             )
@@ -166,10 +158,10 @@ class OptionsManager:
                 )
                 logger.info(f"[OPTIONS] Order placed: {order_id}")
 
-            self.position = OptionsPosition(option, premium, lots)
+            self.position = OptionsPosition(option, premium, lots, lot_size)
 
         except Exception as e:
-            logger.error(f"[OPTIONS] Enter failed: {e}")
+            logger.error(f"[OPTIONS] Enter failed ({symbol} {direction}): {e}")
 
     def monitor_and_exit(self, force_reason: str = ""):
         if not self.has_position():
@@ -189,7 +181,6 @@ class OptionsManager:
             if force_reason:
                 self._exit(current, force_reason)
             elif pct <= -OPTIONS_SL_PCT:
-                self._last_loss_time = datetime.now()
                 self._exit(current, f"Stop loss hit ({pct:.1f}%)")
             elif pct >= OPTIONS_TARGET_PCT:
                 self._exit(current, f"Target hit ({pct:.1f}%)")
@@ -198,9 +189,9 @@ class OptionsManager:
             logger.error(f"[OPTIONS] Monitor error: {e}")
 
     def _exit(self, exit_premium: float, reason: str):
-        pnl = self.position.pnl(exit_premium)
-        pct = self.position.pct_change(exit_premium)
-        lot_size = _LOT_SIZE.get(UNDERLYING, 15)
+        pnl      = self.position.pnl(exit_premium)
+        pct      = self.position.pct_change(exit_premium)
+        lot_size = self.position.lot_size
 
         logger.info(
             f"[OPTIONS EXIT] {self.position.option_type} | "

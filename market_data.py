@@ -1,6 +1,6 @@
 import pandas as pd
 from kiteconnect import KiteConnect
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 # Instrument tokens for indices (fixed, never change)
 _INDEX_TOKENS = {
@@ -8,6 +8,16 @@ _INDEX_TOKENS = {
     "NIFTY BANK": 260105,
     "INDIA VIX":  264969,
 }
+
+# Short alias → full index name (for get_candles)
+_SYMBOL_TO_INDEX = {
+    "NIFTY":     "NIFTY 50",
+    "BANKNIFTY": "NIFTY BANK",
+    "FINNIFTY":  "NIFTY FIN SERVICE",
+}
+
+# Cache NSE instruments once per day to avoid repeat API calls
+_nse_cache: dict = {}
 
 
 def get_ohlcv(kite: KiteConnect, symbol: str, interval: str = "5minute", days: int = 1) -> pd.DataFrame:
@@ -52,9 +62,20 @@ def get_ltp(kite: KiteConnect, symbol: str) -> float:
     return quote[f"NSE:{symbol}"]["last_price"]
 
 
+def get_candles(kite: KiteConnect, symbol: str, interval: str = "5minute", days: int = 5) -> pd.DataFrame:
+    """Unified OHLCV fetcher — handles both index aliases (NIFTY/BANKNIFTY) and stock symbols."""
+    if symbol in _SYMBOL_TO_INDEX:
+        return get_index_data(kite, _SYMBOL_TO_INDEX[symbol], interval, days)
+    return get_ohlcv(kite, symbol, interval, days)
+
+
 def _get_instrument_token(kite: KiteConnect, symbol: str) -> int:
-    instruments = kite.instruments("NSE")
-    for inst in instruments:
-        if inst["tradingsymbol"] == symbol:
-            return inst["instrument_token"]
-    raise ValueError(f"Instrument not found: {symbol}")
+    today = date.today().isoformat()
+    if _nse_cache.get("date") != today:
+        instruments = kite.instruments("NSE")
+        _nse_cache["date"]   = today
+        _nse_cache["tokens"] = {inst["tradingsymbol"]: inst["instrument_token"] for inst in instruments}
+    token = _nse_cache["tokens"].get(symbol)
+    if token is None:
+        raise ValueError(f"Instrument not found in NSE: {symbol}")
+    return token
