@@ -36,8 +36,9 @@ logger = logging.getLogger(__name__)
 _STRIKE_GAP    = {"NIFTY": 50,  "BANKNIFTY": 100}
 _SPREAD_WIDTH  = {"NIFTY": 100, "BANKNIFTY": 200}   # points between short and long leg
 
-SPREAD_TARGET_PCT = 70   # exit when 70% of credit is kept (spread decayed to 30%)
-SPREAD_SL_MULT    = 2.0  # exit when spread doubles (2× entry credit = stop loss)
+SPREAD_TARGET_PCT = 30   # exit when 30% of credit is kept (realistic intraday target)
+SPREAD_SL_MULT    = 1.3  # exit when spread grows 30% beyond entry credit (~tight SL)
+SPREAD_ENTRY_CUTOFF = "12:00"  # no new spreads after this time — not enough theta left
 DAILY_TARGET      = CAPITAL * OPTIONS_DAILY_TARGET_PCT / 100
 
 
@@ -112,6 +113,10 @@ class SpreadManager:
             logger.info("[SPREAD] Already in a spread position — skipping")
             return
         if self.daily_target_reached():
+            return
+        now_str = datetime.now().strftime("%H:%M")
+        if now_str >= SPREAD_ENTRY_CUTOFF:
+            logger.info(f"[SPREAD] Entry cutoff {SPREAD_ENTRY_CUTOFF} passed ({now_str}) — no new spreads today")
             return
 
         try:
