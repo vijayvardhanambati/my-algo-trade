@@ -2,11 +2,11 @@ import logging
 import pandas as pd
 from datetime import date, datetime
 from kiteconnect import KiteConnect
-from config import UNDERLYING, OPTIONS_CAPITAL, OPTIONS_SL_PCT, OPTIONS_TARGET_PCT, TRADING_MODE
+from config import UNDERLYING, OPTIONS_CAPITAL, OPTIONS_SL_PCT, OPTIONS_TARGET_PCT, OPTIONS_DAILY_TARGET_PCT, CAPITAL, TRADING_MODE
 
 logger = logging.getLogger(__name__)
 
-_LOT_SIZE = {"BANKNIFTY": 15, "NIFTY": 50}
+_LOT_SIZE = {"BANKNIFTY": 30, "NIFTY": 75}  # SEBI revised lot sizes Nov 2024
 _instruments_cache: dict = {}
 
 
@@ -92,12 +92,14 @@ class OptionsPosition:
 class OptionsManager:
     """Handles entry, monitoring, and exit of options positions."""
 
-    COOLDOWN_MINUTES = 60  # wait this long after a stop loss before re-entering
+    COOLDOWN_MINUTES  = 60
+    DAILY_TARGET      = CAPITAL * OPTIONS_DAILY_TARGET_PCT / 100  # 5% of ₹25000 = ₹1250
 
     def __init__(self, kite: KiteConnect):
         self.kite            = kite
         self.position: OptionsPosition | None = None
         self.trade_log: list = []
+        self.daily_pnl: float = 0.0
         self._last_loss_time: datetime | None = None
 
     def has_position(self) -> bool:
@@ -113,11 +115,22 @@ class OptionsManager:
             return True
         return False
 
+    def daily_target_reached(self) -> bool:
+        if self.daily_pnl >= self.DAILY_TARGET:
+            logger.info(
+                f"[OPTIONS] Daily target reached ₹{self.daily_pnl:+.2f} "
+                f"(target ₹{self.DAILY_TARGET:.0f}) — no more trades today"
+            )
+            return True
+        return False
+
     def enter(self, direction: str, reason: str):
         if self.has_position():
             logger.info(f"[OPTIONS] Already in a position — skipping new {direction}")
             return
         if self._in_cooldown():
+            return
+        if self.daily_target_reached():
             return
 
         try:
@@ -213,16 +226,19 @@ class OptionsManager:
             except Exception as e:
                 logger.error(f"[OPTIONS] Exit order failed: {e}")
 
+        self.daily_pnl += pnl
         self.trade_log.append({
-            "time":            datetime.now().strftime("%H:%M"),
-            "type":            self.position.option_type,
-            "symbol":          self.position.tradingsymbol,
-            "entry":           self.position.entry_premium,
-            "exit":            exit_premium,
-            "pnl":             pnl,
-            "pct":             pct,
-            "reason":          reason,
+            "time":      datetime.now().strftime("%H:%M"),
+            "type":      self.position.option_type,
+            "symbol":    self.position.tradingsymbol,
+            "entry":     self.position.entry_premium,
+            "exit":      exit_premium,
+            "pnl":       pnl,
+            "pct":       pct,
+            "reason":    reason,
+            "daily_pnl": self.daily_pnl,
         })
+        logger.info(f"[OPTIONS] Daily P&L so far: ₹{self.daily_pnl:+.2f} / target ₹{self.DAILY_TARGET:.0f}")
         self.position = None
 
     def daily_summary(self):
@@ -242,11 +258,15 @@ class OptionsManager:
         total_pnl = sum(t["pnl"] for t in self.trade_log)
         win_rate  = (len(wins) / total * 100) if total else 0
 
+        target_pct = (total_pnl / self.DAILY_TARGET * 100) if self.DAILY_TARGET else 0
+        target_hit = "YES ✓" if total_pnl >= self.DAILY_TARGET else f"NO (reached {target_pct:.0f}%)"
+
         logger.info(f"  Trades taken  : {total}")
         logger.info(f"  Winners       : {len(wins)}")
         logger.info(f"  Losers        : {len(losses)}")
         logger.info(f"  Win rate      : {win_rate:.1f}%")
         logger.info(f"  Total P&L     : ₹{total_pnl:+.2f}")
+        logger.info(f"  Daily target  : ₹{self.DAILY_TARGET:.0f} — {target_hit}")
         logger.info(sep)
         logger.info("  Trade-by-trade breakdown:")
         for i, t in enumerate(self.trade_log, 1):
@@ -257,7 +277,8 @@ class OptionsManager:
                 f"P&L ₹{t['pnl']:+.2f} ({t['pct']:+.1f}%) | {t['reason']}"
             )
         logger.info(sep)
-        self.trade_log = []  # reset for next day
+        self.trade_log = []   # reset for next day
+        self.daily_pnl = 0.0  # reset daily counter
 
     def square_off(self):
         if self.has_position():
