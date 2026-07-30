@@ -17,8 +17,8 @@ QUANTITY        = 1
 OPTIONS_CAPITAL = 20000
 
 # ── Options risk management ────────────────────────────────────────────────────
-OPTIONS_SL_PCT           = 30   # exit if premium drops 30%
-OPTIONS_TARGET_PCT       = 20   # exit if premium gains 20%
+OPTIONS_SL_PCT           = 40   # exit if premium drops 40%  (allow room to breathe)
+OPTIONS_TARGET_PCT       = 60   # exit if premium gains 60%  (big wins cover losses)
 OPTIONS_DAILY_TARGET_PCT = 5    # stop trading once daily P&L = 5% of capital = ₹1250
 
 # ── VIX zones (determines buyer vs seller mode) ────────────────────────────────
