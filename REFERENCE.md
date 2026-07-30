@@ -339,6 +339,7 @@ curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/mar
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/news_sentiment.py -o news_sentiment.py
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/options_trader.py -o options_trader.py
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/auth.py -o auth.py
+curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/spread_trader.py -o spread_trader.py
 
 # Strategy files
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/strategies/__init__.py -o strategies/__init__.py
