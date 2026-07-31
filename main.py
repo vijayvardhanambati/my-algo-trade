@@ -228,6 +228,10 @@ def main():
         if has_position:
             # In a trade — monitor every 5 seconds for SL/target
             monitor_positions(options_manager, spread_manager)
+            # If position just closed, scan immediately for the next trade
+            if not (options_manager.has_position() or spread_manager.has_position()):
+                logger.info("[BOT] Position closed — scanning immediately for next entry")
+                last_scan = 0
             time.sleep(MONITOR_INTERVAL)
         else:
             # No trade — scan for entry every 5 minutes
