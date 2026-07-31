@@ -112,8 +112,6 @@ class SpreadManager:
         if self.has_position():
             logger.info("[SPREAD] Already in a spread position — skipping")
             return
-        if self.daily_target_reached():
-            return
         now_str = datetime.now().strftime("%H:%M")
         if now_str >= SPREAD_ENTRY_CUTOFF:
             logger.info(f"[SPREAD] Entry cutoff {SPREAD_ENTRY_CUTOFF} passed ({now_str}) — no new spreads today")

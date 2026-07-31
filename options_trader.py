@@ -122,8 +122,6 @@ class OptionsManager:
         if self.has_position():
             logger.info(f"[OPTIONS] Already in a position — skipping new {direction}")
             return
-        if self.daily_target_reached():
-            return
 
         try:
             option   = get_atm_option(self.kite, direction, symbol)
@@ -132,6 +130,12 @@ class OptionsManager:
 
             if premium <= 0:
                 logger.warning(f"[OPTIONS] Invalid premium {premium} for {symbol} — skipping")
+                return
+            if premium < 20:
+                logger.warning(f"[OPTIONS] Premium ₹{premium:.2f} too cheap — illiquid, skipping")
+                return
+            if premium > 500:
+                logger.warning(f"[OPTIONS] Premium ₹{premium:.2f} too expensive — skipping")
                 return
 
             lots = max(1, int(OPTIONS_CAPITAL / (premium * lot_size)))

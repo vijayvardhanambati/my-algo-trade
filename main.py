@@ -16,7 +16,7 @@ from options_trader import OptionsManager
 from spread_trader import SpreadManager
 from strategies import (
     MACrossoverStrategy, RSIStrategy, VWAPBreakoutStrategy,
-    CandlestickStrategy, SupertrendStrategy, get_market_regime,
+    CandlestickStrategy, SupertrendStrategy, ADXStrategy, get_market_regime,
 )
 from strategies.base import Signal
 
@@ -29,7 +29,19 @@ logger = logging.getLogger(__name__)
 
 MONITOR_INTERVAL = 5    # seconds — how often to check open positions
 SCAN_INTERVAL    = 300  # seconds — how often to scan for new entries (5 minutes)
-THRESHOLD        = 2    # minimum strategy votes needed to enter a trade
+
+# Weighted consensus — more reliable indicators count more.
+# ADX also acts as a hard veto: if it returns HOLD (choppy market), the symbol is skipped.
+_WEIGHTS = {
+    "SupertrendStrategy":   2,  # reliable trend-following
+    "RSIStrategy":          2,  # momentum confirmation
+    "ADXStrategy":          2,  # trend strength (HOLD = hard veto)
+    "VWAPBreakoutStrategy": 1,
+    "CandlestickStrategy":  1,
+    "MACrossoverStrategy":  1,
+}
+_MAX_VOTES = sum(_WEIGHTS.values())   # 9
+THRESHOLD  = 4                        # need 4/9 weighted votes to enter
 
 
 def is_market_open() -> bool:
@@ -47,7 +59,11 @@ def is_good_trading_window() -> bool:
 
 
 def _score_symbol(kite, symbol: str):
-    """Run all 5 strategies on one symbol. Returns (signal_map, buy_votes, sell_votes, total)."""
+    """
+    Run all 6 strategies on one symbol with weighted voting.
+    Returns (signal_map, buy_votes, sell_votes, max_possible_votes).
+    Reliable indicators (Supertrend, RSI, ADX) count 2× vs 1× for others.
+    """
     df = get_candles(kite, symbol)
     strategies = [
         MACrossoverStrategy(symbol),
@@ -55,19 +71,24 @@ def _score_symbol(kite, symbol: str):
         VWAPBreakoutStrategy(symbol),
         CandlestickStrategy(symbol),
         SupertrendStrategy(symbol),
+        ADXStrategy(symbol),
     ]
-    signal_map, signals = {}, []
+    signal_map = {}
+    buy_votes = sell_votes = 0
     for strat in strategies:
+        name   = strat.__class__.__name__
+        weight = _WEIGHTS.get(name, 1)
         try:
             sig = strat.generate_signal(df)
-            signal_map[strat.__class__.__name__] = sig
-            signals.append(sig)
-            logger.info(f"  [{symbol}][{strat.__class__.__name__}] {sig.signal.value} — {sig.reason}")
+            signal_map[name] = sig
+            if sig.signal == Signal.BUY:
+                buy_votes  += weight
+            elif sig.signal == Signal.SELL:
+                sell_votes += weight
+            logger.info(f"  [{symbol}][{name}] {sig.signal.value} (w={weight}) — {sig.reason}")
         except Exception as e:
-            logger.warning(f"  [{symbol}][{strat.__class__.__name__}] Error: {e}")
-    buy_votes  = sum(1 for s in signals if s.signal == Signal.BUY)
-    sell_votes = sum(1 for s in signals if s.signal == Signal.SELL)
-    return signal_map, buy_votes, sell_votes, len(signals)
+            logger.warning(f"  [{symbol}][{name}] Error: {e}")
+    return signal_map, buy_votes, sell_votes, _MAX_VOTES
 
 
 def find_best_signal(kite, regime: str):
@@ -82,6 +103,14 @@ def find_best_signal(kite, regime: str):
     for symbol in WATCHLIST:
         try:
             signal_map, buy_votes, sell_votes, total = _score_symbol(kite, symbol)
+
+            # Hard veto 1: ADX < 20 means choppy market — skip regardless of other signals
+            adx_sig = signal_map.get("ADXStrategy")
+            if adx_sig and adx_sig.signal == Signal.HOLD:
+                logger.info(f"  [VETO] {symbol}: ADX choppy — no trend, skipping")
+                continue
+
+            # Hard veto 2: Supertrend must not oppose the trade direction
             st_sig = signal_map.get("SupertrendStrategy")
 
             if regime == "bull" and buy_votes >= THRESHOLD:
@@ -125,7 +154,7 @@ def monitor_positions(options_manager: OptionsManager, spread_manager: SpreadMan
 
 
 def run_buyer_mode(kite, options_manager: OptionsManager, regime: str, sentiment: str):
-    if options_manager.has_position() or options_manager.daily_target_reached():
+    if options_manager.has_position():
         return
 
     symbol, direction, reason = find_best_signal(kite, regime)
@@ -144,7 +173,7 @@ def run_buyer_mode(kite, options_manager: OptionsManager, regime: str, sentiment
 
 
 def run_seller_mode(spread_manager: SpreadManager, regime: str):
-    if spread_manager.has_position() or spread_manager.daily_target_reached():
+    if spread_manager.has_position():
         return
     if regime == "neutral":
         return

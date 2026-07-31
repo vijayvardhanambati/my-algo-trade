@@ -339,7 +339,6 @@ curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/mar
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/news_sentiment.py -o news_sentiment.py
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/options_trader.py -o options_trader.py
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/auth.py -o auth.py
-curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/spread_trader.py -o spread_trader.py
 
 # Strategy files
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/main/strategies/__init__.py -o strategies/__init__.py
@@ -628,3 +627,17 @@ Check these in order:
 ---
 
 *Last updated: July 2025*
+
+# Pull all files from the upgrades branch
+cd /root/my-algo-trade
+
+curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/main.py -o main.py
+curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/config.py -o config.py
+curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/options_trader.py -o options_trader.py
+curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/spread_trader.py -o spread_trader.py
+curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/market_data.py -o market_data.py
+curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/strategies/__init__.py -o strategies/__init__.py
+curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/strategies/adx.py -o strategies/adx.py
+
+systemctl restart kite-trader
+journalctl -u kite-trader -f
