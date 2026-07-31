@@ -15,8 +15,9 @@ Strategy:
     Profit when NIFTY stays flat or goes DOWN.
 
 Exit rules:
-  - Target : spread value drops to 30% of entry credit (kept 70% of premium)
-  - Stop   : spread value reaches 2× entry credit (spread doubled against us)
+  - Target : kept% reaches 25% → exit and re-enter immediately if before 1:30 PM
+  - Trail  : once 15% is kept, exit if kept% drops 8 pts from its peak (locks profit)
+  - Stop   : spread value reaches 1.3× entry credit (tight SL)
   - EOD    : force-close at 2:45 PM regardless
 
 Capital required (NIFTY, 100-pt spread, 1 lot):
@@ -34,12 +35,14 @@ from options_trader import _LOT_SIZE, _get_nfo_instruments, get_option_ltp
 logger = logging.getLogger(__name__)
 
 _STRIKE_GAP    = {"NIFTY": 50,  "BANKNIFTY": 100}
-_SPREAD_WIDTH  = {"NIFTY": 100, "BANKNIFTY": 200}   # points between short and long leg
+_SPREAD_WIDTH  = {"NIFTY": 100, "BANKNIFTY": 200}
 
-SPREAD_TARGET_PCT = 25   # exit when 25% of credit is kept, then re-enter immediately
-SPREAD_SL_MULT    = 1.3  # exit when spread grows 30% beyond entry credit (~tight SL)
-SPREAD_ENTRY_CUTOFF = "12:00"  # no new spreads after this time — not enough theta left
-DAILY_TARGET      = CAPITAL * OPTIONS_DAILY_TARGET_PCT / 100
+SPREAD_TARGET_PCT         = 30
+SPREAD_SL_MULT            = 1.3
+SPREAD_ENTRY_CUTOFF = "14:00"   # no new spreads within 45 min of EOD square-off
+TRAIL_ACTIVATION          = 15        # start trailing once 15% of credit is kept
+TRAIL_PULLBACK            = 8         # exit if kept% drops 8 pts from peak
+DAILY_TARGET              = CAPITAL * OPTIONS_DAILY_TARGET_PCT / 100
 
 
 def _find_strike(kite: KiteConnect, direction: str, strike: float) -> dict:
@@ -71,7 +74,8 @@ class CreditSpreadPosition:
         self.long_leg     = long_leg      # bought option (hedge)
         self.entry_credit = entry_credit  # net premium received per unit
         self.lots         = lots
-        self.lot_size     = _LOT_SIZE.get(UNDERLYING, 75)
+        self.lot_size      = _LOT_SIZE.get(UNDERLYING, 75)
+        self.peak_pct_kept = 0.0   # trailing high-water mark
 
     def current_spread_value(self, kite: KiteConnect) -> float:
         short_ltp = get_option_ltp(kite, self.short_leg["tradingsymbol"])
@@ -94,7 +98,8 @@ class SpreadManager:
         self.kite       = kite
         self.position: CreditSpreadPosition | None = None
         self.trade_log: list = []
-        self.daily_pnl: float = 0.0
+        self.daily_pnl: float   = 0.0
+        self.daily_entries: int = 0   # counts trades taken today for re-entry logic
 
     def has_position(self) -> bool:
         return self.position is not None
@@ -114,7 +119,7 @@ class SpreadManager:
             return
         now_str = datetime.now().strftime("%H:%M")
         if now_str >= SPREAD_ENTRY_CUTOFF:
-            logger.info(f"[SPREAD] Entry cutoff {SPREAD_ENTRY_CUTOFF} passed ({now_str}) — no new spreads today")
+            logger.info(f"[SPREAD] Entry cutoff {SPREAD_ENTRY_CUTOFF} reached ({now_str}) — no new spreads")
             return
 
         try:
@@ -192,6 +197,8 @@ class SpreadManager:
                 )
 
             self.position = CreditSpreadPosition(spread_type, short_leg, long_leg, net_credit, lots)
+            self.daily_entries += 1
+            logger.info(f"[SPREAD] Trade #{self.daily_entries} today")
 
         except Exception as e:
             logger.error(f"[SPREAD] Enter failed: {e}")
@@ -204,19 +211,31 @@ class SpreadManager:
             pnl            = self.position.pnl(current_spread)
             pct_kept       = self.position.pct_kept(current_spread)
 
+            # Update trailing high-water mark
+            if pct_kept > self.position.peak_pct_kept:
+                self.position.peak_pct_kept = pct_kept
+
+            peak       = self.position.peak_pct_kept
+            trail_stop = peak - TRAIL_PULLBACK if peak >= TRAIL_ACTIVATION else None
+            trail_str  = f" | Trail@{trail_stop:.1f}%" if trail_stop is not None else ""
+
             logger.info(
                 f"[SPREAD] {self.position.spread_type} | "
-                f"Entry credit: ₹{self.position.entry_credit:.2f} | "
-                f"Current spread: ₹{current_spread:.2f} | "
-                f"Kept: {pct_kept:.1f}% | P&L: ₹{pnl:+.2f}"
+                f"Credit: ₹{self.position.entry_credit:.2f} | "
+                f"Current: ₹{current_spread:.2f} | "
+                f"Kept: {pct_kept:.1f}% (peak {peak:.1f}%){trail_str} | "
+                f"P&L: ₹{pnl:+.2f}"
             )
 
             if force_reason:
                 self._exit(current_spread, force_reason)
             elif pct_kept >= SPREAD_TARGET_PCT:
-                self._exit(current_spread, f"Target hit — kept {pct_kept:.1f}% of credit")
+                self._exit(current_spread, f"Target — kept {pct_kept:.1f}%")
             elif current_spread >= self.position.entry_credit * SPREAD_SL_MULT:
-                self._exit(current_spread, f"Stop loss — spread at {SPREAD_SL_MULT}× entry credit")
+                self._exit(current_spread, f"SL — spread {SPREAD_SL_MULT:.1f}× entry credit")
+            elif trail_stop is not None and pct_kept <= trail_stop:
+                self._exit(current_spread,
+                           f"Trail — peak {peak:.1f}% → fell to {pct_kept:.1f}%")
 
         except Exception as e:
             logger.error(f"[SPREAD] Monitor error: {e}")
@@ -304,5 +323,6 @@ class SpreadManager:
                 f"P&L ₹{t['pnl']:+.2f} (kept {t['pct_kept']:.1f}%) | {t['reason']}"
             )
         logger.info(sep)
-        self.trade_log = []
-        self.daily_pnl = 0.0
+        self.trade_log     = []
+        self.daily_pnl     = 0.0
+        self.daily_entries = 0
