@@ -1,0 +1,35 @@
+Two ways to get today's logs — pick whichever you can access first.
+
+Option 1 — systemd journal (most complete, includes restarts)
+
+SSH back into the VM (Google Cloud Console → VM instances → SSH button), then:
+
+
+# Today's logs only
+sudo journalctl -u kite-trader --since today --no-pager
+
+# Tail live (if bot is still running)
+sudo journalctl -u kite-trader -f
+Option 2 — bot.log file (same output, written to disk)
+
+
+cat /root/my-algo-trade/bot.log | grep "2026-08-06"
+
+# Or just the last N lines
+tail -200 /root/my-algo-trade/bot.log
+Option 3 — today's trade summary only (quickest read)
+
+
+cat /root/my-algo-trade/trade_history.json
+This shows the structured record — number of trades, wins, P&L — saved at EOD by _save_daily_record(). If it's still before 14:45 IST the file won't have today's entry yet; use bot.log instead.
+
+If the bot died when SSH disconnected (i.e., you ran it directly in the terminal instead of via systemd):
+
+
+sudo systemctl status kite-trader
+If it shows inactive or failed, the process died with the session. Restart it:
+
+
+sudo systemctl restart kite-trader
+sudo journalctl -u kite-trader -f
+The safest way to avoid this in future is always running via systemd (sudo systemctl start kite-trader) rather than python main.py directly — systemd keeps it alive regardless of your SSH session.
