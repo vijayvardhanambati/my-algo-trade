@@ -8,7 +8,7 @@ from auth import login
 from config import (
     MARKET_OPEN, MARKET_CLOSE, SQUARE_OFF_TIME, TRADING_MODE,
     VIX_NO_TRADE_BELOW, VIX_SELLER_MAX, VIX_BUYER_MAX,
-    WATCHLIST,
+    WATCHLIST, UNDERLYING,
 )
 from market_data import get_candles, get_vix
 from news_sentiment import get_sentiment
@@ -219,12 +219,51 @@ def run_buyer_mode(kite, options_manager: OptionsManager, regime: str, sentiment
     options_manager.enter(direction, f"BUYER | {reason} | {sentiment}", symbol)
 
 
-def run_seller_mode(spread_manager: SpreadManager, regime: str):
+def run_seller_mode(kite, spread_manager: SpreadManager, sentiment: str):
     if spread_manager.has_position():
         return
-    if regime == "neutral":
+
+    logger.info(f"[SELLER] Scoring {UNDERLYING} across all strategies ...")
+    signal_map, buy_votes, sell_votes, total = _score_symbol(kite, UNDERLYING)
+
+    # ADX hard veto: choppy/trendless market → no credit spreads
+    adx_sig = signal_map.get("ADXStrategy")
+    if adx_sig and adx_sig.signal == Signal.HOLD:
+        logger.info("[SELLER] ADX choppy — no clear trend, skipping spread entry")
         return
-    spread_manager.enter(regime, f"SELLER | {regime.upper()} regime, low VIX")
+
+    # News sentiment adds 1 vote to tip the balance when signals are mixed
+    if sentiment == "bullish":
+        buy_votes += 1
+    elif sentiment == "bearish":
+        sell_votes += 1
+    logger.info(
+        f"[SELLER] Final votes — bull:{buy_votes} bear:{sell_votes} / {total + 1} "
+        f"(need {THRESHOLD}+ with clear lead) | news={sentiment}"
+    )
+
+    st_sig = signal_map.get("SupertrendStrategy")
+
+    if buy_votes >= THRESHOLD and buy_votes > sell_votes:
+        if st_sig and st_sig.signal == Signal.SELL:
+            logger.info("[SELLER] Supertrend bearish — blocking BULL_PUT despite bullish consensus")
+            return
+        spread_manager.enter(
+            "bull",
+            f"SELLER | {buy_votes}/{total + 1} bull votes | {sentiment} news | BULL_PUT"
+        )
+    elif sell_votes >= THRESHOLD and sell_votes > buy_votes:
+        if st_sig and st_sig.signal == Signal.BUY:
+            logger.info("[SELLER] Supertrend bullish — blocking BEAR_CALL despite bearish consensus")
+            return
+        spread_manager.enter(
+            "bear",
+            f"SELLER | {sell_votes}/{total + 1} bear votes | {sentiment} news | BEAR_CALL"
+        )
+    else:
+        logger.info(
+            f"[SELLER] No clear edge — bull:{buy_votes} bear:{sell_votes} — skipping"
+        )
 
 
 def scan_for_entry(kite, options_manager: OptionsManager, spread_manager: SpreadManager):
@@ -252,17 +291,18 @@ def scan_for_entry(kite, options_manager: OptionsManager, spread_manager: Spread
         logger.info(f"[VIX] Too high ({vix:.2f}) — skipping")
         return
 
-    regime = get_market_regime(kite)
-    if regime == "neutral":
-        logger.info("[REGIME] Neutral — skipping")
-        return
-
     if VIX_NO_TRADE_BELOW <= vix < VIX_SELLER_MAX:
         logger.info(f"[MODE] SELLER (VIX={vix:.2f})")
-        run_seller_mode(spread_manager, regime)
+        sentiment = get_sentiment()
+        logger.info(f"[NEWS] Sentiment: {sentiment.upper()}")
+        run_seller_mode(kite, spread_manager, sentiment)
 
     elif VIX_SELLER_MAX <= vix <= VIX_BUYER_MAX:
         logger.info(f"[MODE] BUYER (VIX={vix:.2f})")
+        regime = get_market_regime(kite)
+        if regime == "neutral":
+            logger.info("[REGIME] Neutral — skipping")
+            return
         sentiment = get_sentiment()
         logger.info(f"[NEWS] Sentiment: {sentiment.upper()}")
         if regime == "bull" and sentiment == "bearish":

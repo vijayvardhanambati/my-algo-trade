@@ -45,6 +45,8 @@ SPREAD_MIN_ENTRY_TIME    = "10:00" # wait 30 min after open for volatility to se
 SPREAD_DAILY_MAX_LOSS    = 1500    # hard stop: no more spreads if day loss > ₹1,500
 TRAIL_ACTIVATION         = 15      # start trailing once 15% of credit is kept
 TRAIL_PULLBACK           = 8       # exit if kept% drops 8 pts from peak
+SPREAD_ZOMBIE_TIMEOUT    = 60      # exit if negative after this many minutes in a trade
+TRAIL_COOLDOWN_MIN       = 30      # wait this many minutes before re-entry after a trail exit
 DAILY_TARGET             = CAPITAL * OPTIONS_DAILY_TARGET_PCT / 100
 
 
@@ -79,6 +81,7 @@ class CreditSpreadPosition:
         self.lots         = lots
         self.lot_size      = _LOT_SIZE.get(UNDERLYING, 75)
         self.peak_pct_kept = 0.0   # trailing high-water mark
+        self.entry_time    = datetime.now()
 
     def current_spread_value(self, kite: KiteConnect) -> float:
         short_ltp = get_option_ltp(kite, self.short_leg["tradingsymbol"])
@@ -104,6 +107,7 @@ class SpreadManager:
         self.daily_pnl: float      = 0.0
         self.daily_entries: int    = 0
         self.sl_hit_direction: str = ""   # "bull" or "bear" — blocks re-entry in same direction after SL
+        self.last_trail_exit_time: datetime | None = None
 
     def has_position(self) -> bool:
         return self.position is not None
@@ -130,15 +134,24 @@ class SpreadManager:
             return
         if self.sl_hit_direction and self.sl_hit_direction == regime:
             logger.warning(
-                f"[SPREAD] {self.sl_hit_direction.upper()} already hit SL today — "
-                f"blocking {regime.upper()} re-entry; waiting for market to flip"
+                f"[SPREAD] {self.sl_hit_direction.upper()} direction already blocked today — "
+                f"waiting for market to flip before re-entering {regime.upper()}"
             )
             return
         if self.sl_hit_direction and self.sl_hit_direction != regime:
             logger.info(
-                f"[SPREAD] Pivoting — {self.sl_hit_direction.upper()} SL fired, "
+                f"[SPREAD] Pivoting — {self.sl_hit_direction.upper()} blocked, "
                 f"market flipped to {regime.upper()} — entering opposite spread"
             )
+        if self.last_trail_exit_time is not None:
+            mins_since_trail = (datetime.now() - self.last_trail_exit_time).total_seconds() / 60
+            if mins_since_trail < TRAIL_COOLDOWN_MIN:
+                remaining = TRAIL_COOLDOWN_MIN - mins_since_trail
+                logger.info(
+                    f"[SPREAD] Trail exit {mins_since_trail:.0f}min ago — "
+                    f"cooling down, re-entry in {remaining:.0f}min"
+                )
+                return
         if self.daily_pnl <= -SPREAD_DAILY_MAX_LOSS:
             logger.warning(f"[SPREAD] Daily loss limit ₹{SPREAD_DAILY_MAX_LOSS} hit (P&L ₹{self.daily_pnl:.0f}) — no more spreads today")
             return
@@ -256,6 +269,13 @@ class SpreadManager:
                 self._exit(current_spread, f"SL — P&L ₹{pnl:.0f} exceeded -₹{SPREAD_MAX_LOSS_ABS} limit")
             elif current_spread >= self.position.entry_credit * SPREAD_SL_MULT:
                 self._exit(current_spread, f"SL — spread {SPREAD_SL_MULT:.2f}× entry credit")
+            elif (
+                (datetime.now() - self.position.entry_time).total_seconds() / 60 >= SPREAD_ZOMBIE_TIMEOUT
+                and pct_kept < 0
+            ):
+                mins = (datetime.now() - self.position.entry_time).total_seconds() / 60
+                self._exit(current_spread,
+                           f"Time stop — {mins:.0f}min in trade, never profitable (kept {pct_kept:.1f}%)")
             elif trail_stop is not None and pct_kept <= trail_stop:
                 self._exit(current_spread,
                            f"Trail — peak {peak:.1f}% → fell to {pct_kept:.1f}%")
@@ -302,13 +322,16 @@ class SpreadManager:
             except Exception as e:
                 logger.error(f"[SPREAD] Exit orders failed: {e}")
 
-        if "SL" in reason:
+        if "SL" in reason or "Time stop" in reason:
             self.sl_hit_direction = "bull" if self.position.spread_type == "BULL_PUT" else "bear"
             opposite = "BEAR_CALL" if self.sl_hit_direction == "bull" else "BULL_PUT"
             logger.warning(
-                f"[SPREAD] SL exit on {self.position.spread_type} — market is moving against "
+                f"[SPREAD] {reason.split(' —')[0]} on {self.position.spread_type} — market not cooperating with "
                 f"{self.sl_hit_direction.upper()} bias. Will pivot to {opposite} if regime flips."
             )
+        if "Trail" in reason:
+            self.last_trail_exit_time = datetime.now()
+            logger.info("[SPREAD] Trail stop fired — 30-min cooldown before next entry")
 
         self.daily_pnl += pnl
         self.trade_log.append({
@@ -354,7 +377,8 @@ class SpreadManager:
                 f"P&L ₹{t['pnl']:+.2f} (kept {t['pct_kept']:.1f}%) | {t['reason']}"
             )
         logger.info(sep)
-        self.trade_log        = []
-        self.daily_pnl        = 0.0
-        self.daily_entries    = 0
-        self.sl_hit_direction = ""
+        self.trade_log            = []
+        self.daily_pnl            = 0.0
+        self.daily_entries        = 0
+        self.sl_hit_direction     = ""
+        self.last_trail_exit_time = None
