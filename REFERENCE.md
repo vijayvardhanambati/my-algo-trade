@@ -638,6 +638,7 @@ curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/market_data.py -o market_data.py
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/strategies/__init__.py -o strategies/__init__.py
 curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/strategies/adx.py -o strategies/adx.py
+curl https://raw.githubusercontent.com/vijayvardhanambati/my-algo-trade/upgrades/trade_history.json -o trade_history.json
 
 systemctl restart kite-trader
 journalctl -u kite-trader -f
