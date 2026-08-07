@@ -48,6 +48,7 @@ SPREAD_MIN_ENTRY_TIME     = "10:00" # wait 30 min after open for volatility to s
 SPREAD_DAILY_MAX_LOSS     = 1500    # hard stop: no more spreads if day loss > ₹1,500
 TRAIL_ACTIVATION          = 15      # start trailing once 15% of credit is kept
 TRAIL_PULLBACK            = 5       # exit if kept% drops 5 pts from peak (was 8)
+SPREAD_MIN_CREDIT         = 30      # skip entry if net credit is below ₹30 (thin premium = bad risk/reward)
 SPREAD_ZOMBIE_TIMEOUT     = 60      # exit if negative after this many minutes in a trade
 TRAIL_COOLDOWN_MIN        = 30      # wait this many minutes before re-entry after a trail exit
 SIGNAL_CHECK_INTERVAL_SEC = 300     # re-evaluate Supertrend+ADX every 5 min while in a trade
@@ -201,6 +202,12 @@ class SpreadManager:
 
             if net_credit <= 0:
                 logger.warning(f"[SPREAD] Net credit is ₹{net_credit:.2f} — skipping")
+                return
+            if net_credit < SPREAD_MIN_CREDIT:
+                logger.warning(
+                    f"[SPREAD] Credit ₹{net_credit:.2f} below minimum ₹{SPREAD_MIN_CREDIT} "
+                    f"— thin premium, skipping (risk/reward too poor)"
+                )
                 return
 
             # Allocate 25% of capital to spreads; each lot requires width×lot_size margin
@@ -388,18 +395,18 @@ class SpreadManager:
 
             if is_bull:
                 if st.signal == Signal.SELL and adx.signal == Signal.SELL:
-                    if pct_kept < 0:
+                    if pct_kept < 5:
                         self._exit(current_spread,
-                                   f"Signal reversal — bearish (ST+ADX) while BULL_PUT losing (kept {pct_kept:.1f}%)")
+                                   f"Signal reversal — bearish (ST+ADX) while BULL_PUT not profitable enough (kept {pct_kept:.1f}%)")
                     else:
                         logger.warning(
                             f"[SPREAD] Bearish signals while in BULL_PUT — monitoring closely (kept {pct_kept:.1f}%)"
                         )
             else:
                 if st.signal == Signal.BUY and adx.signal == Signal.BUY:
-                    if pct_kept < 0:
+                    if pct_kept < 5:
                         self._exit(current_spread,
-                                   f"Signal reversal — bullish (ST+ADX) while BEAR_CALL losing (kept {pct_kept:.1f}%)")
+                                   f"Signal reversal — bullish (ST+ADX) while BEAR_CALL not profitable enough (kept {pct_kept:.1f}%)")
                     else:
                         logger.warning(
                             f"[SPREAD] Bullish signals while in BEAR_CALL — monitoring closely (kept {pct_kept:.1f}%)"

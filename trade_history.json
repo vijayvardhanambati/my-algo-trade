@@ -68,5 +68,15 @@
     "options_wins": 0,
     "options_pnl": 0.0,
     "total_pnl": -393.75
+  },
+  {
+    "date": "2026-08-07",
+    "spread_trades": 4,
+    "spread_wins": 2,
+    "spread_pnl": 585.0,
+    "options_trades": 0,
+    "options_wins": 0,
+    "options_pnl": 0.0,
+    "total_pnl": 585.0
   }
 ]

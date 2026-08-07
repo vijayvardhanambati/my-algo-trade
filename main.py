@@ -41,7 +41,7 @@ _WEIGHTS = {
     "MACrossoverStrategy":  1,
 }
 _MAX_VOTES   = sum(_WEIGHTS.values())   # 9
-THRESHOLD    = 4                        # need 4/9 weighted votes to enter
+THRESHOLD    = 6                        # need 6/9 weighted votes to enter (filters weak signals)
 HISTORY_FILE = "trade_history.json"
 
 
