@@ -1,0 +1,51 @@
+Q1 — History no longer gets overwritten by restarts
+_save_daily_record() now checks before writing: if an existing record for today has trade(s) and the current session has 0 (fresh restart that missed the session), it logs a warning and skips the overwrite. The real data stays intact.
+
+To fix Aug 6's corrupted record right now on the VM, SSH in and run this one-liner:
+
+
+python3 -c "
+import json
+with open('trade_history.json') as f: h = json.load(f)
+for r in h:
+    if r['date'] == '2026-08-06':
+        r['spread_trades'] = 2; r['spread_wins'] = 1
+        r['spread_pnl'] = -393.75; r['total_pnl'] = -393.75
+with open('trade_history.json', 'w') as f: json.dump(h, f, indent=2)
+print('Aug 6 corrected')
+"
+Q2 — Target 25% → 20%, trail pullback 8pts → 5pts
+Today's BEAR_CALL peaked at exactly 20% at 11:05. With target=20 it would have exited there at ₹+1968 instead of waiting for 25% that never came and trailing out at ₹+1181. The tighter 5pt trail also means if a future trade peaks at 17% and reverses, it exits at 12% (was 9%) — better floor protection when target isn't reached.
+
+Q3 + cooldown bypass — bot now reads signals while in a trade
+Every 5 minutes during a position, Supertrend + ADX are re-evaluated:
+
+If both oppose the position and we're losing (kept < 0%) → exits immediately ("Signal reversal")
+If both oppose but we're still profitable → logs a WARNING and keeps monitoring
+Signal reversal exits also set sl_hit_direction so the same direction is blocked, same as an SL
+30-min trail cooldown is now signal-gated: if the market flips and the new direction gets 6+ votes within the cooldown window, the bot re-enters immediately instead of sitting idle for the full 30 minutes.
+
+Deploy to VM
+
+git add spread_trader.py main.py
+# (don't commit — just push or copy to VM via scp/git)
+Or if you deploy via git pull on the VM:
+
+
+git push origin upgrades
+# then on VM: git pull && sudo systemctl restart kite-trader
+
+Setup after cloning — 3 steps total:
+
+Install Python 3.12 if you don't have it: winget install Python.Python.3.12 (or download from python.org — check "Add to PATH" during install).
+From the repo folder, run:
+
+.\setup.ps1
+This creates the venv, installs all packages from requirements.txt, and creates your .env file from the template.
+Edit .env (opens in Notepad or any editor) and paste in your KITE_API_KEY and KITE_API_SECRET — you get these from https://developers.kite.trade under your app. Leave TRADING_MODE=paper.
+Then, each day before trading:
+
+
+.\venv\Scripts\python.exe refresh_token.py   # log in via the printed URL, paste back the redirect URL
+.\venv\Scripts\python.exe main.py            # starts the bot
+If PowerShell blocks the script with an execution-policy error, run Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass first (only affects that terminal session).
