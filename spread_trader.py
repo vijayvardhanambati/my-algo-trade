@@ -15,8 +15,8 @@ Strategy:
     Profit when NIFTY stays flat or goes DOWN.
 
 Exit rules:
-  - Target : kept% reaches 25% → exit and re-enter immediately if before 1:30 PM
-  - Trail  : once 15% is kept, exit if kept% drops 8 pts from its peak (locks profit)
+  - Target : kept% reaches 20% → exit and re-enter immediately if before 1:30 PM
+  - Trail  : once 15% is kept, exit if kept% drops 5 pts from its peak (locks profit)
   - Stop   : spread value reaches 1.3× entry credit (tight SL)
   - EOD    : force-close at 2:45 PM regardless
 
@@ -30,24 +30,28 @@ from datetime import date, datetime
 from kiteconnect import KiteConnect
 
 from config import UNDERLYING, CAPITAL, OPTIONS_DAILY_TARGET_PCT, TRADING_MODE
+from market_data import get_candles
 from options_trader import _LOT_SIZE, _get_nfo_instruments, get_option_ltp
+from strategies import SupertrendStrategy, ADXStrategy
+from strategies.base import Signal
 
 logger = logging.getLogger(__name__)
 
 _STRIKE_GAP    = {"NIFTY": 50,  "BANKNIFTY": 100}
 _SPREAD_WIDTH  = {"NIFTY": 100, "BANKNIFTY": 200}
 
-SPREAD_TARGET_PCT        = 25
-SPREAD_SL_MULT           = 1.15    # secondary SL: spread grows 15% above credit
-SPREAD_MAX_LOSS_ABS      = 800     # primary SL: exit if P&L < -₹800 (stops fast)
-SPREAD_ENTRY_CUTOFF      = "14:00" # no new spreads within 45 min of EOD square-off
-SPREAD_MIN_ENTRY_TIME    = "10:00" # wait 30 min after open for volatility to settle
-SPREAD_DAILY_MAX_LOSS    = 1500    # hard stop: no more spreads if day loss > ₹1,500
-TRAIL_ACTIVATION         = 15      # start trailing once 15% of credit is kept
-TRAIL_PULLBACK           = 8       # exit if kept% drops 8 pts from peak
-SPREAD_ZOMBIE_TIMEOUT    = 60      # exit if negative after this many minutes in a trade
-TRAIL_COOLDOWN_MIN       = 30      # wait this many minutes before re-entry after a trail exit
-DAILY_TARGET             = CAPITAL * OPTIONS_DAILY_TARGET_PCT / 100
+SPREAD_TARGET_PCT         = 20      # exit when 20% of premium is kept (was 25)
+SPREAD_SL_MULT            = 1.15    # secondary SL: spread grows 15% above credit
+SPREAD_MAX_LOSS_ABS       = 800     # primary SL: exit if P&L < -₹800 (stops fast)
+SPREAD_ENTRY_CUTOFF       = "14:00" # no new spreads within 45 min of EOD square-off
+SPREAD_MIN_ENTRY_TIME     = "10:00" # wait 30 min after open for volatility to settle
+SPREAD_DAILY_MAX_LOSS     = 1500    # hard stop: no more spreads if day loss > ₹1,500
+TRAIL_ACTIVATION          = 15      # start trailing once 15% of credit is kept
+TRAIL_PULLBACK            = 5       # exit if kept% drops 5 pts from peak (was 8)
+SPREAD_ZOMBIE_TIMEOUT     = 60      # exit if negative after this many minutes in a trade
+TRAIL_COOLDOWN_MIN        = 30      # wait this many minutes before re-entry after a trail exit
+SIGNAL_CHECK_INTERVAL_SEC = 300     # re-evaluate Supertrend+ADX every 5 min while in a trade
+DAILY_TARGET              = CAPITAL * OPTIONS_DAILY_TARGET_PCT / 100
 
 
 def _find_strike(kite: KiteConnect, direction: str, strike: float) -> dict:
@@ -108,6 +112,7 @@ class SpreadManager:
         self.daily_entries: int    = 0
         self.sl_hit_direction: str = ""   # "bull" or "bear" — blocks re-entry in same direction after SL
         self.last_trail_exit_time: datetime | None = None
+        self.last_signal_check: datetime | None    = None
 
     def has_position(self) -> bool:
         return self.position is not None
@@ -121,7 +126,7 @@ class SpreadManager:
             return True
         return False
 
-    def enter(self, regime: str, reason: str):
+    def enter(self, regime: str, reason: str, buy_votes: int = 0, sell_votes: int = 0, total_votes: int = 9):
         if self.has_position():
             logger.info("[SPREAD] Already in a spread position — skipping")
             return
@@ -146,12 +151,21 @@ class SpreadManager:
         if self.last_trail_exit_time is not None:
             mins_since_trail = (datetime.now() - self.last_trail_exit_time).total_seconds() / 60
             if mins_since_trail < TRAIL_COOLDOWN_MIN:
-                remaining = TRAIL_COOLDOWN_MIN - mins_since_trail
-                logger.info(
-                    f"[SPREAD] Trail exit {mins_since_trail:.0f}min ago — "
-                    f"cooling down, re-entry in {remaining:.0f}min"
-                )
-                return
+                regime_votes = buy_votes if regime == "bull" else sell_votes
+                if regime_votes >= 6:
+                    logger.info(
+                        f"[SPREAD] Trail cooldown overridden — strong {regime.upper()} signal "
+                        f"({regime_votes}/{total_votes} votes) after {mins_since_trail:.0f}min — "
+                        f"re-entering immediately"
+                    )
+                else:
+                    remaining = TRAIL_COOLDOWN_MIN - mins_since_trail
+                    logger.info(
+                        f"[SPREAD] Trail exit {mins_since_trail:.0f}min ago — "
+                        f"cooling down, re-entry in {remaining:.0f}min "
+                        f"(bypassed early if {regime.upper()} votes ≥ 6)"
+                    )
+                    return
         if self.daily_pnl <= -SPREAD_DAILY_MAX_LOSS:
             logger.warning(f"[SPREAD] Daily loss limit ₹{SPREAD_DAILY_MAX_LOSS} hit (P&L ₹{self.daily_pnl:.0f}) — no more spreads today")
             return
@@ -280,6 +294,9 @@ class SpreadManager:
                 self._exit(current_spread,
                            f"Trail — peak {peak:.1f}% → fell to {pct_kept:.1f}%")
 
+            if self.has_position():
+                self._maybe_check_signals(current_spread, pct_kept)
+
         except Exception as e:
             logger.error(f"[SPREAD] Monitor error: {e}")
 
@@ -322,7 +339,7 @@ class SpreadManager:
             except Exception as e:
                 logger.error(f"[SPREAD] Exit orders failed: {e}")
 
-        if "SL" in reason or "Time stop" in reason:
+        if "SL" in reason or "Time stop" in reason or "Signal reversal" in reason:
             self.sl_hit_direction = "bull" if self.position.spread_type == "BULL_PUT" else "bear"
             opposite = "BEAR_CALL" if self.sl_hit_direction == "bull" else "BULL_PUT"
             logger.warning(
@@ -331,7 +348,7 @@ class SpreadManager:
             )
         if "Trail" in reason:
             self.last_trail_exit_time = datetime.now()
-            logger.info("[SPREAD] Trail stop fired — 30-min cooldown before next entry")
+            logger.info("[SPREAD] Trail stop fired — 30-min cooldown (bypassed early if 6+ votes in new direction)")
 
         self.daily_pnl += pnl
         self.trade_log.append({
@@ -348,6 +365,47 @@ class SpreadManager:
         })
         logger.info(f"[SPREAD] Daily P&L so far: ₹{self.daily_pnl:+.2f} / target ₹{DAILY_TARGET:.0f}")
         self.position = None
+
+    def _maybe_check_signals(self, current_spread: float, pct_kept: float) -> None:
+        """Re-run Supertrend + ADX every 5 min while in a trade; exit early if both flip against position."""
+        now = datetime.now()
+        if (self.last_signal_check is not None and
+                (now - self.last_signal_check).total_seconds() < SIGNAL_CHECK_INTERVAL_SEC):
+            return
+        self.last_signal_check = now
+        try:
+            df      = get_candles(self.kite, UNDERLYING)
+            st      = SupertrendStrategy(UNDERLYING).generate_signal(df)
+            adx     = ADXStrategy(UNDERLYING).generate_signal(df)
+            is_bull = self.position.spread_type == "BULL_PUT"
+
+            st_dir  = "BUY" if st.signal  == Signal.BUY  else ("SELL" if st.signal  == Signal.SELL  else "HOLD")
+            adx_dir = "BUY" if adx.signal == Signal.BUY  else ("SELL" if adx.signal == Signal.SELL  else "HOLD")
+            logger.info(
+                f"[SPREAD] Intraday check — Supertrend:{st_dir} ADX:{adx_dir} "
+                f"| {self.position.spread_type} | kept:{pct_kept:.1f}%"
+            )
+
+            if is_bull:
+                if st.signal == Signal.SELL and adx.signal == Signal.SELL:
+                    if pct_kept < 0:
+                        self._exit(current_spread,
+                                   f"Signal reversal — bearish (ST+ADX) while BULL_PUT losing (kept {pct_kept:.1f}%)")
+                    else:
+                        logger.warning(
+                            f"[SPREAD] Bearish signals while in BULL_PUT — monitoring closely (kept {pct_kept:.1f}%)"
+                        )
+            else:
+                if st.signal == Signal.BUY and adx.signal == Signal.BUY:
+                    if pct_kept < 0:
+                        self._exit(current_spread,
+                                   f"Signal reversal — bullish (ST+ADX) while BEAR_CALL losing (kept {pct_kept:.1f}%)")
+                    else:
+                        logger.warning(
+                            f"[SPREAD] Bullish signals while in BEAR_CALL — monitoring closely (kept {pct_kept:.1f}%)"
+                        )
+        except Exception as e:
+            logger.debug(f"[SPREAD] Intraday signal check failed: {e}")
 
     def square_off(self):
         if self.has_position():
@@ -382,3 +440,4 @@ class SpreadManager:
         self.daily_entries        = 0
         self.sl_hit_direction     = ""
         self.last_trail_exit_time = None
+        self.last_signal_check    = None

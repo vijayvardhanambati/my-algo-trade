@@ -1,0 +1,72 @@
+[
+  {
+    "date": "2026-07-28",
+    "spread_trades": 0,
+    "spread_wins": 0,
+    "spread_pnl": 0.0,
+    "options_trades": 2,
+    "options_wins": 0,
+    "options_pnl": -1773.0,
+    "total_pnl": -1773.0
+  },
+  {
+    "date": "2026-07-29",
+    "spread_trades": 0,
+    "spread_wins": 0,
+    "spread_pnl": 0.0,
+    "options_trades": 1,
+    "options_wins": 1,
+    "options_pnl": 178.5,
+    "total_pnl": 178.5
+  },
+  {
+    "date": "2026-07-30",
+    "spread_trades": 1,
+    "spread_wins": 1,
+    "spread_pnl": 157.5,
+    "options_trades": 0,
+    "options_wins": 0,
+    "options_pnl": 0.0,
+    "total_pnl": 157.5
+  },
+  {
+    "date": "2026-08-03",
+    "spread_trades": 3,
+    "spread_wins": 3,
+    "spread_pnl": 1530.0,
+    "options_trades": 0,
+    "options_wins": 0,
+    "options_pnl": 0.0,
+    "total_pnl": 1530.0
+  },
+  {
+    "date": "2026-08-04",
+    "spread_trades": 0,
+    "spread_wins": 0,
+    "spread_pnl": 0.0,
+    "options_trades": 0,
+    "options_wins": 0,
+    "options_pnl": 0.0,
+    "total_pnl": 0.0
+  },
+  {
+    "date": "2026-08-05",
+    "spread_trades": 2,
+    "spread_wins": 0,
+    "spread_pnl": -3465.0,
+    "options_trades": 0,
+    "options_wins": 0,
+    "options_pnl": 0.0,
+    "total_pnl": -3465.0
+  },
+  {
+    "date": "2026-08-06",
+    "spread_trades": 2,
+    "spread_wins": 1,
+    "spread_pnl": -393.75,
+    "options_trades": 0,
+    "options_wins": 0,
+    "options_pnl": 0.0,
+    "total_pnl": -393.75
+  }
+]

@@ -73,7 +73,28 @@ def _save_daily_record(options_manager: "OptionsManager", spread_manager: "Sprea
         "options_pnl":    round(sum(t["pnl"] for t in o_log), 2),
         "total_pnl":      round(sum(t["pnl"] for t in s_log + o_log), 2),
     }
-    history = [r for r in _load_history() if r["date"] != record["date"]]
+    history  = _load_history()
+    existing = next((r for r in history if r["date"] == record["date"]), None)
+    if existing:
+        # Always accumulate — never replace. This means restarts only ADD their own
+        # trades to whatever earlier sessions already saved for today.
+        this_s = len(s_log)
+        this_o = len(o_log)
+        record["spread_trades"]  += existing.get("spread_trades",  0)
+        record["spread_wins"]    += existing.get("spread_wins",    0)
+        record["spread_pnl"]      = round(record["spread_pnl"]  + existing.get("spread_pnl",  0.0), 2)
+        record["options_trades"] += existing.get("options_trades", 0)
+        record["options_wins"]   += existing.get("options_wins",   0)
+        record["options_pnl"]     = round(record["options_pnl"] + existing.get("options_pnl", 0.0), 2)
+        record["total_pnl"]       = round(record["spread_pnl"]  + record["options_pnl"], 2)
+        if this_s + this_o > 0:
+            logger.info(
+                f"[BOT] Consolidated {record['date']} — added {this_s} spread + {this_o} options "
+                f"trades from this session into existing record"
+            )
+        else:
+            logger.info(f"[BOT] No new trades this session — existing {record['date']} record preserved")
+    history = [r for r in history if r["date"] != record["date"]]
     history.append(record)
     try:
         with open(HISTORY_FILE, "w") as f:
@@ -250,7 +271,8 @@ def run_seller_mode(kite, spread_manager: SpreadManager, sentiment: str):
             return
         spread_manager.enter(
             "bull",
-            f"SELLER | {buy_votes}/{total + 1} bull votes | {sentiment} news | BULL_PUT"
+            f"SELLER | {buy_votes}/{total + 1} bull votes | {sentiment} news | BULL_PUT",
+            buy_votes=buy_votes, sell_votes=sell_votes, total_votes=total + 1,
         )
     elif sell_votes >= THRESHOLD and sell_votes > buy_votes:
         if st_sig and st_sig.signal == Signal.BUY:
@@ -258,7 +280,8 @@ def run_seller_mode(kite, spread_manager: SpreadManager, sentiment: str):
             return
         spread_manager.enter(
             "bear",
-            f"SELLER | {sell_votes}/{total + 1} bear votes | {sentiment} news | BEAR_CALL"
+            f"SELLER | {sell_votes}/{total + 1} bear votes | {sentiment} news | BEAR_CALL",
+            buy_votes=buy_votes, sell_votes=sell_votes, total_votes=total + 1,
         )
     else:
         logger.info(
